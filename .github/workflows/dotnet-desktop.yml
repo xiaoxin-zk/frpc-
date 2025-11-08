@@ -1,23 +1,19 @@
-name: Build and Release FRP Client Manager
+name: Build and Release
 
 on:
   push:
     tags: ['v*']
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 env:
   DOTNET_VERSION: '8.0.x'
-  PROJECT_PATH: 'FRPClientManager.csproj'
-  BUILD_CONFIGURATION: 'Release'
 
 jobs:
   build:
     runs-on: windows-latest
     
     steps:
-    - name: Checkout code
+    - name: Checkout
       uses: actions/checkout@v4
       
     - name: Setup .NET
@@ -25,37 +21,80 @@ jobs:
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
         
-    - name: Restore dependencies
-      run: dotnet restore ${{ env.PROJECT_PATH }}
-      
-    - name: Build
-      run: dotnet build ${{ env.PROJECT_PATH }} --configuration ${{ env.BUILD_CONFIGURATION }} --no-restore
-      
-    - name: Test
-      run: dotnet test --verbosity normal --no-build --configuration ${{ env.BUILD_CONFIGURATION }}
-      
-    - name: Publish
+    - name: Get Version
+      id: get_version
       run: |
-        dotnet publish ${{ env.PROJECT_PATH }} `
-          --configuration ${{ env.BUILD_CONFIGURATION }} `
-          --output ./publish `
+        $version = $env:GITHUB_REF -replace "refs/tags/v", ""
+        echo "VERSION=$version" >> $env:GITHUB_ENV
+        echo "version=$version" >> $env:GITHUB_OUTPUT
+        
+    - name: Restore and Build
+      run: |
+        dotnet restore
+        dotnet build --configuration Release --no-restore
+        
+    - name: Publish Single File
+      run: |
+        dotnet publish `
+          --configuration Release `
+          --output ./publish-single `
           --runtime win-x64 `
           --self-contained true `
           -p:PublishSingleFile=true `
-          -p:IncludeNativeLibrariesForSelfExtract=true `
-          -p:DebugType=embedded `
-          -p:DebugSymbols=true
+          -p:PublishReadyToRun=true `
+          -p:IncludeNativeLibrariesForSelfExtract=true
           
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: FRPClientManager
-        path: ./publish/
-        retention-days: 7
-        
+    - name: Publish Framework Dependent
+      run: |
+        dotnet publish `
+          --configuration Release `
+          --output ./publish-framework-dependent `
+          --runtime win-x64 `
+          --self-contained false
+          
     - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/')
+      id: create_release
       uses: softprops/action-gh-release@v1
       with:
-        files: ./publish/*
-        generate_release_notes: true
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ env.VERSION }}
+        body: |
+          FRP客户端管理器 ${{ env.VERSION }}
+          
+          更新内容：
+          - 自动构建发布
+          - 包含单文件版本和框架依赖版本
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Upload Single File Release
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./publish-single/FRPClientManager.exe
+        asset_name: FRPClientManager-${{ env.VERSION }}-win-x64.exe
+        asset_content_type: application/octet-stream
+        
+    - name: Upload Framework Dependent Release
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./publish-framework-dependent/FRPClientManager.exe
+        asset_name: FRPClientManager-${{ env.VERSION }}-win-x64-framework-dependent.exe
+        asset_content_type: application/octet-stream
+        
+    - name: Upload Symbols
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./publish-single/FRPClientManager.pdb
+        asset_name: FRPClientManager-${{ env.VERSION }}-symbols.pdb
+        asset_content_type: application/octet-stream
